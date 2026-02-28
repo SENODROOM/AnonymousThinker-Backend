@@ -34,6 +34,7 @@ Provide "few-shot" examples of how to reject specific atheistic claims or miscon
 
 ## 🚀 Deployment
 Once your Knowledge Base and Persona are set, the AI is "trained" globally.
+
 - To export your data for weight-level fine-tuning on Hugging Face, use the **JSONL Export** in settings.
 
 ---
