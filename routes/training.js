@@ -1,5 +1,5 @@
 const express = require('express');
-console.log('--- TRAINING ROUTE FILE LOADED: v1.0.1 ---');
+console.log('--- TRAINING ROUTE FILE LOADED: v1.0.2 ---');
 const { TrainingEntry, SystemPrompt } = require('../models/Training');
 const Knowledge = require('../models/Knowledge');
 const auth = require('../middleware/auth');
@@ -11,7 +11,48 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 const router = express.Router();
 
-// Apply adminAuth to ALL training routes
+// Debug middleware to log ALL requests to this router
+router.use((req, res, next) => {
+  console.log(`[TRAINING-ROUTE] ${req.method} ${req.originalUrl}`);
+  next();
+});
+
+// GET /api/training/persona - moved to top for testing
+router.get('/persona', auth, async (req, res) => {
+  console.log('DEBUG: /api/training/persona GET route hit');
+  try {
+    const prompt = await SystemPrompt.findOne({ userId: req.user._id, isActive: true });
+    if (!prompt) {
+      return res.json({ persona: '', text: '' });
+    }
+    res.json({ persona: prompt.name, text: prompt.prompt });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch persona' });
+  }
+});
+
+// POST /api/training/persona - moved to top for testing
+router.post('/persona', auth, async (req, res) => {
+  console.log('DEBUG: /api/training/persona POST route hit');
+  try {
+    const { persona, text } = req.body;
+    if (!persona || !text) {
+      return res.status(400).json({ error: 'Persona name and logic text are required' });
+    }
+    await SystemPrompt.updateMany({ userId: req.user._id }, { isActive: false });
+    let prompt = await SystemPrompt.findOneAndUpdate(
+      { userId: req.user._id, name: persona },
+      { prompt: text, isActive: true },
+      { new: true, upsert: true }
+    );
+    res.json({ message: 'Persona updated', persona: prompt.name, text: prompt.prompt });
+  } catch (error) {
+    console.error('Persona upload error:', error);
+    res.status(500).json({ error: 'Failed to update persona' });
+  }
+});
+
+// Apply adminAuth to OTHER training routes
 router.use(auth, adminAuth);
 
 // ===== SYSTEM PROMPTS (Persona Training) =====
@@ -109,6 +150,7 @@ router.delete('/prompts/:id', auth, async (req, res) => {
     res.status(500).json({ error: 'Failed to delete prompt' });
   }
 });
+
 
 // ===== TRAINING EXAMPLES (Few-shot learning) =====
 
@@ -235,7 +277,27 @@ router.post('/knowledge/upload', auth, upload.single('file'), async (req, res) =
         console.log('DEBUG-V2: Starting PDF extraction for:', fileName);
         const data = await pdfParser(req.file.buffer);
         text = data.text;
+
         console.log('DEBUG: Extraction complete. Text length:', text ? text.length : 0);
+
+        // Detect likely scanned PDF (CamScanner or similar) for logging purposes
+        const isCamScanner = data.info?.Producer?.toLowerCase().includes('camscanner') ||
+          data.info?.Author?.toLowerCase().includes('camscanner') ||
+          data.info?.Producer?.toLowerCase().includes('intsig');
+
+        const onlyNewlines = text && text.replace(/[\n\s\t]/g, '').length === 0;
+
+        if (isCamScanner || onlyNewlines) {
+          console.log('DEBUG: Warning - Scanned or low-text document detected.');
+          // We will let it proceed; the chunking logic will handle empty results.
+        }
+
+        if (text) {
+          console.log('DEBUG: First 100 chars of extracted text:', JSON.stringify(text.substring(0, 100)));
+          if (data.info) {
+            console.log('DEBUG: PDF Info:', JSON.stringify(data.info));
+          }
+        }
       } catch (err) {
         console.error('PDF Parsing inner error:', err);
         return res.status(500).json({ error: `PDF Processing failed: ${err.message}` });
@@ -247,9 +309,15 @@ router.post('/knowledge/upload', auth, upload.single('file'), async (req, res) =
       return res.status(400).json({ error: 'Unsupported file type. Please use PDF or TXT.' });
     }
 
-    if (!text || text.trim().length === 0) {
-      console.log('DEBUG: Extraction resulted in NO text.');
-      return res.status(400).json({ error: 'The file appears to be empty or unreadable.' });
+    const trimmedText = text ? text.trim() : '';
+    if (!trimmedText || trimmedText.length === 0) {
+      console.log('DEBUG: Extraction resulted in NO text (after trim).');
+      // Return 200 instead of 400 to allow UI to handle it gracefully
+      return res.status(200).json({
+        message: 'Upload successful, but no text layer was found in this PDF.',
+        noTextExtracted: true,
+        error: 'This PDF appears to be a scanned image or contains no selectable text. Please upload a text-based PDF or copy-paste the content directly.'
+      });
     }
 
     // Chunking logic
@@ -257,13 +325,15 @@ router.post('/knowledge/upload', auth, upload.single('file'), async (req, res) =
     const chunks = [];
     for (let i = 0; i < text.length; i += chunkSize) {
       const chunk = text.substring(i, i + chunkSize).trim();
-      if (chunk.length > 50) chunks.push(chunk);
+      // Reduced from 50 to 20 to capture shorter snippets
+      if (chunk.length >= 20) chunks.push(chunk);
     }
 
     console.log(`DEBUG: Created ${chunks.length} valid chunks.`);
 
     if (chunks.length === 0) {
-      return res.status(400).json({ error: 'File too small or no meaningful text found.' });
+      console.log('DEBUG: No chunks passed the length threshold (20 chars).');
+      return res.status(400).json({ error: 'The file contains too little text to be processed (min 20 chars required).' });
     }
 
     // Save chunks to database
