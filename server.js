@@ -7,6 +7,7 @@ require('dotenv').config();
 const authRoutes = require('./routes/auth');
 const chatRoutes = require('./routes/chat');
 const trainingRoutes = require('./routes/training');
+const submoduleRoutes = require('./routes/submodule');
 
 const app = express();
 
@@ -26,6 +27,7 @@ mongoose.connect(process.env.MONGODB_URI)
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/training', trainingRoutes);
+app.use('/api/submodule', submoduleRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

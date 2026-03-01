@@ -312,11 +312,20 @@ router.post('/knowledge/upload', auth, upload.single('file'), async (req, res) =
     const trimmedText = text ? text.trim() : '';
     if (!trimmedText || trimmedText.length === 0) {
       console.log('DEBUG: Extraction resulted in NO text (after trim).');
-      // Return 200 instead of 400 to allow UI to handle it gracefully
+      // SAVE A PLACEHOLDER FOR SCANNED/EMPTY DOCUMENTS SO THEY SHOW UP IN THE LIST
+      const placeholder = new Knowledge({
+        userId: req.user._id,
+        content: "[SCANNED DOCUMENT - NO SELECTABLE TEXT FOUND. PLEASE USE OCR OR COPY-PASTE TEXT.]",
+        fileName: fileName,
+        fileType: fileType
+      });
+      await placeholder.save();
+
       return res.status(200).json({
-        message: 'Upload successful, but no text layer was found in this PDF.',
+        message: 'Upload successful. Note: This PDF appears to be a scanned image and no text was extracted.',
         noTextExtracted: true,
-        error: 'This PDF appears to be a scanned image or contains no selectable text. Please upload a text-based PDF or copy-paste the content directly.'
+        chunks: 0,
+        fileName: fileName
       });
     }
 
