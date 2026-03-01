@@ -15,7 +15,7 @@ const app = express();
 app.use(cors({
   origin: [
     'http://localhost:3000',
-    'https://anoymous-thinker.vercel.app'
+    'https://anonymous-thinker.vercel.app'
   ],
   credentials: true
 }));
