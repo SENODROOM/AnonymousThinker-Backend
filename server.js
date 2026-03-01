@@ -34,8 +34,11 @@ app.use('/api/submodule', submoduleRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'AnonymousThinker API running', version: '1.0.3' });
+  res.json({ status: 'ok', message: 'AnonymousThinker API running', version: '1.0.4' });
 });
+
+// Handle Preflight
+app.options('*', cors());
 
 // Root route for Vercel
 app.get('/', (req, res) => {
@@ -45,7 +48,7 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 5000;
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
-    console.log(`🚀 AnonymousThinker server v1.0.3 running on port ${PORT}`);
+    console.log(`🚀 AnonymousThinker server v1.0.4 running on port ${PORT}`);
   });
 }
 
