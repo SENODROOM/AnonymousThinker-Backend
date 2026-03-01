@@ -21,10 +21,18 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
+let dbError = null;
+
 // Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('✅ MongoDB Connected'))
-  .catch(err => console.error('❌ MongoDB Error:', err));
+  .then(() => {
+    console.log('✅ MongoDB Connected');
+    dbError = null;
+  })
+  .catch(err => {
+    console.error('❌ MongoDB Error:', err);
+    dbError = err.message;
+  });
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -38,7 +46,8 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     env: process.env.NODE_ENV,
     dbConnected: mongoose.connection.readyState === 1,
-    version: '1.0.5'
+    dbError: dbError,
+    version: '1.0.6'
   });
 });
 
