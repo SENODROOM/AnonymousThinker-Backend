@@ -34,7 +34,12 @@ app.use('/api/submodule', submoduleRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'AnonymousThinker API running', version: '1.0.4' });
+  res.json({
+    status: 'ok',
+    env: process.env.NODE_ENV,
+    dbConnected: mongoose.connection.readyState === 1,
+    version: '1.0.5'
+  });
 });
 
 // Handle Preflight

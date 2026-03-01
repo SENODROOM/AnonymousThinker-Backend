@@ -7,6 +7,10 @@ const router = express.Router();
 
 // Generate JWT token
 const generateToken = (userId) => {
+  if (!process.env.JWT_SECRET) {
+    console.error('CRITICAL: JWT_SECRET is not defined in environment variables');
+    throw new Error('JWT_SECRET_MISSING');
+  }
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
 };
 
@@ -111,13 +115,26 @@ router.post('/login', async (req, res) => {
         id: user._id,
         username: user.username,
         email: user.email,
-        role: user.role, // Added role
+        role: user.role,
         createdAt: user.createdAt
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Server error during login' });
+    console.error('Detailed Login Error:', {
+      message: error.message,
+      stack: error.stack,
+      envSet: {
+        mongodb: !!process.env.MONGODB_URI,
+        jwt: !!process.env.JWT_SECRET,
+        admin: !!process.env.ADMIN_EMAIL
+      }
+    });
+
+    const statusCode = error.message === 'JWT_SECRET_MISSING' ? 500 : 500;
+    res.status(500).json({
+      error: 'Server error during login',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
