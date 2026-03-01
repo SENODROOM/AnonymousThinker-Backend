@@ -13,7 +13,10 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' ? 'https://yourdomain.com' : 'http://localhost:3000',
+  origin: [
+    'http://localhost:3000',
+    'https://anoymous-thinker.vercel.app'
+  ],
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -31,10 +34,19 @@ app.use('/api/submodule', submoduleRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'AnonymousThinker API running' });
+  res.json({ status: 'ok', message: 'AnonymousThinker API running', version: '1.0.3' });
+});
+
+// Root route for Vercel
+app.get('/', (req, res) => {
+  res.json({ message: 'AnonymousThinker API is live' });
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 AnonymousThinker server v1.0.1 (TIMESTAMP: ${new Date().toISOString()}) running on port ${PORT}`);
-});
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`🚀 AnonymousThinker server v1.0.3 running on port ${PORT}`);
+  });
+}
+
+module.exports = app;
