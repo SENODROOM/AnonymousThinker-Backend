@@ -1,5 +1,5 @@
 const express = require('express');
-console.log('--- TRAINING ROUTE FILE LOADED: v1.0.4 ---');
+console.log('--- TRAINING ROUTE FILE LOADED: v1.1.0 ---');
 const { TrainingEntry, SystemPrompt } = require('../models/Training');
 const Knowledge = require('../models/Knowledge');
 const auth = require('../middleware/auth');
@@ -8,6 +8,65 @@ const multer = require('multer');
 
 const upload = multer({ storage: multer.memoryStorage() });
 const router = express.Router();
+
+// ============================================================
+// DEFAULT PERSONA — used if admin has not set one yet
+// ============================================================
+const DEFAULT_PERSONA_TEXT = `You are AnonymousThinker, an AI designed to understand different thoughts and create meaningful conclusions from them. You were made by Muhammad Saad Amin.
+
+IDENTITY RULES (never break these):
+- If asked who you are: "I am AnonymousThinker, an AI to understand different thoughts and to create a conclusion from them. I was made by Muhammad Saad Amin."
+- If asked who made you or who is Muhammad Saad Amin: "Muhammad Saad Amin is an explorer of different thoughts with a deep curiosity to learn — and he is the one who made me."
+- Never say you are made by Meta, Mistral, Hugging Face, Groq, or any other company.
+
+You are an intellectual defender of Islam. Be patient, logical, and respectful. Use the provided knowledge base to answer questions grounded in Islamic truth.`;
+
+// ============================================================
+// SMART CHUNKING HELPER
+// Splits text into ~500 word chunks at sentence/paragraph
+// boundaries for much better RAG retrieval
+// ============================================================
+function smartChunk(text, wordsPerChunk = 500) {
+  // Normalize whitespace and split into sentences
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n');
+  
+  // Split by paragraph first, then by sentences if paragraphs are too large
+  const paragraphs = normalized.split(/\n\n+/);
+  
+  const chunks = [];
+  let currentChunk = '';
+  let currentWordCount = 0;
+
+  for (const para of paragraphs) {
+    const paraWords = para.trim().split(/\s+/).length;
+
+    if (currentWordCount + paraWords > wordsPerChunk && currentChunk.trim().length >= 100) {
+      // Save current chunk and start new one
+      chunks.push(currentChunk.trim());
+      currentChunk = para + '\n\n';
+      currentWordCount = paraWords;
+    } else {
+      currentChunk += para + '\n\n';
+      currentWordCount += paraWords;
+    }
+  }
+
+  // Save the last chunk
+  if (currentChunk.trim().length >= 50) {
+    chunks.push(currentChunk.trim());
+  }
+
+  // If no good paragraphs were found, fall back to character-based chunking
+  if (chunks.length === 0) {
+    const chunkSize = 2000; // ~500 words in chars
+    for (let i = 0; i < text.length; i += chunkSize) {
+      const chunk = text.substring(i, i + chunkSize).trim();
+      if (chunk.length >= 50) chunks.push(chunk);
+    }
+  }
+
+  return chunks;
+}
 
 // Debug middleware to log ALL requests to this router
 router.use((req, res, next) => {
@@ -50,6 +109,12 @@ router.post('/persona', auth, async (req, res) => {
   }
 });
 
+// GET /api/training/default-persona - returns the built-in default persona text
+// Useful for the admin UI to pre-fill the persona editor
+router.get('/default-persona', auth, adminAuth, (req, res) => {
+  res.json({ text: DEFAULT_PERSONA_TEXT });
+});
+
 // ===== ADMIN PROTECTED ROUTES =====
 // Apply adminAuth to ALL subsequent routes
 router.use(auth, adminAuth);
@@ -82,7 +147,11 @@ router.post('/prompts', async (req, res) => {
 router.put('/prompts/:id/activate', async (req, res) => {
   try {
     await SystemPrompt.updateMany({ userId: req.user._id }, { isActive: false });
-    const prompt = await SystemPrompt.findOneAndUpdate({ _id: req.params.id, userId: req.user._id }, { isActive: true }, { new: true });
+    const prompt = await SystemPrompt.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { isActive: true },
+      { new: true }
+    );
     if (!prompt) return res.status(404).json({ error: 'Prompt not found' });
     res.json(prompt);
   } catch (error) {
@@ -115,7 +184,12 @@ router.post('/examples', async (req, res) => {
   try {
     const { prompt, response, category } = req.body;
     if (!prompt || !response) return res.status(400).json({ error: 'Prompt and response are required' });
-    const entry = new TrainingEntry({ userId: req.user._id, prompt, response, category: category || 'general' });
+    const entry = new TrainingEntry({
+      userId: req.user._id,
+      prompt,
+      response,
+      category: category || 'general'
+    });
     await entry.save();
     res.status(201).json(entry);
   } catch (error) {
@@ -161,6 +235,7 @@ router.get('/knowledge', async (req, res) => {
 });
 
 // POST /api/training/knowledge/upload
+// Uses smart chunking (~500 words per chunk) for better RAG retrieval
 router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
   console.log(`[TRAINING] 📤 Uploading: ${req.file?.originalname}`);
   try {
@@ -181,29 +256,40 @@ router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
     }
 
     const trimmedText = text ? text.trim() : '';
+
     if (!trimmedText) {
+      // Scanned/image PDF with no extractable text
       const placeholder = new Knowledge({
         userId: req.user._id,
-        content: "[SCANNED DOCUMENT]",
+        content: "[SCANNED DOCUMENT — no text could be extracted]",
         fileName,
         fileType
       });
       await placeholder.save();
-      return res.status(200).json({ message: 'Upload successful (Scanned)', chunks: 1 });
+      return res.status(200).json({
+        message: 'Upload successful (Scanned PDF — no text extracted)',
+        chunks: 1,
+        warning: 'This appears to be a scanned PDF. Text could not be extracted. Consider using a text-based PDF.'
+      });
     }
 
-    const chunkSize = 1000;
-    const chunks = [];
-    for (let i = 0; i < text.length; i += chunkSize) {
-      const chunk = text.substring(i, i + chunkSize).trim();
-      if (chunk.length >= 20) chunks.push(chunk);
-    }
+    // Delete existing chunks for this file before re-uploading
+    await Knowledge.deleteMany({ userId: req.user._id, fileName });
+
+    // Use smart chunking for better RAG retrieval
+    const chunks = smartChunk(trimmedText, 500);
+
+    console.log(`[TRAINING] 📦 Split "${fileName}" into ${chunks.length} smart chunks`);
 
     await Promise.all(chunks.map(content => {
       return new Knowledge({ userId: req.user._id, content, fileName, fileType }).save();
     }));
 
-    res.status(201).json({ message: `Processed ${fileName}`, chunks: chunks.length });
+    res.status(201).json({
+      message: `Processed "${fileName}" successfully`,
+      chunks: chunks.length
+    });
+
   } catch (error) {
     console.error('[UPLOAD ERROR]', error);
     res.status(500).json({ error: 'Failed to process file' });
@@ -214,8 +300,8 @@ router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
 router.delete('/knowledge/:fileName', async (req, res) => {
   try {
     const { fileName } = req.params;
-    await Knowledge.deleteMany({ userId: req.user._id, fileName });
-    res.json({ message: `Knowledge source "${fileName}" removed` });
+    const result = await Knowledge.deleteMany({ userId: req.user._id, fileName });
+    res.json({ message: `Knowledge source "${fileName}" removed`, deletedChunks: result.deletedCount });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete knowledge' });
   }

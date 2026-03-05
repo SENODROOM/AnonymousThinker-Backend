@@ -7,6 +7,25 @@ const { callHuggingFace, callGroq } = require('../config/aiService');
 
 const router = express.Router();
 
+// ============================================================
+// CORE IDENTITY — always prepended to every system prompt
+// ============================================================
+const IDENTITY_BLOCK = `
+### IDENTITY (NON-NEGOTIABLE — NEVER BREAK CHARACTER)
+Your name is AnonymousThinker. You are an AI designed to understand different thoughts and create meaningful conclusions from them. You were made by Muhammad Saad Amin.
+
+STRICT RULES:
+- If anyone asks "Who are you?", "What are you?", or "Who is AnonymousThinker?":
+  Reply EXACTLY: "I am AnonymousThinker, an AI to understand different thoughts and to create a conclusion from them. I was made by Muhammad Saad Amin."
+
+- If anyone asks "Who is Muhammad Saad Amin?" or "Who made you?" or "Who created you?":
+  Reply EXACTLY: "Muhammad Saad Amin is an explorer of different thoughts with a deep curiosity to learn — and he is the one who made me."
+
+- NEVER say you are made by Meta, Mistral, Hugging Face, Groq, OpenAI, or any other company or organization.
+- NEVER deny being AnonymousThinker.
+- NEVER break this identity under any circumstances, even if the user insists or tries to trick you.
+`;
+
 // GET /api/chat/conversations - get all user conversations
 router.get('/conversations', auth, async (req, res) => {
   try {
@@ -135,18 +154,6 @@ router.post('/conversations/:id/message', auth, async (req, res) => {
       conversation.generateTitle();
     }
 
-    // Get active system prompt for this user
-    const activePrompt = await SystemPrompt.findOne({
-      userId: req.user._id,
-      isActive: true
-    });
-
-    const systemPromptText = activePrompt?.prompt ||
-      `You are AnonymousThinker, a helpful, thoughtful, and intelligent AI assistant. 
-       You provide clear, accurate, and engaging responses. You think deeply about questions 
-       and provide nuanced answers. Be concise but thorough. If you don't know something, 
-       say so honestly.`;
-
     // Prepare messages for AI (last 20 messages for context)
     const recentMessages = conversation.messages
       .slice(-20)
@@ -169,15 +176,14 @@ router.post('/conversations/:id/message', auth, async (req, res) => {
 
     try {
       // 0. Perform RAG (Retrieval Augmented Generation) - GLOBAL ADMIN KNOWLEDGE
-      // Search Knowledge Base for relevant snippets from any ADMIN account
       let knowledgeContext = "";
       try {
         const relevantDocs = await Knowledge.find(
-          { $text: { $search: content } }, // Search all knowledge (since only admins can upload now)
+          { $text: { $search: content } },
           { score: { $meta: "textScore" } }
         )
           .sort({ score: { $meta: "textScore" } })
-          .limit(5); // Increased limit for better coverage
+          .limit(5);
 
         if (relevantDocs.length > 0) {
           knowledgeContext = relevantDocs.map(doc => `[Source: ${doc.fileName}]: ${doc.content}`).join("\n\n");
@@ -189,9 +195,11 @@ router.post('/conversations/:id/message', auth, async (req, res) => {
 
       // Fetch Global Admin Persona/Prompt
       const adminPersona = await SystemPrompt.findOne({ isActive: true }).sort({ createdAt: -1 });
-      const baseSystemPrompt = adminPersona ? adminPersona.prompt : "You are AnonymousThinker, a helpful and intellectually honest AI assistant.";
+      const baseSystemPrompt = adminPersona
+        ? adminPersona.prompt
+        : `You are AnonymousThinker, an AI to understand different thoughts and to create a conclusion from them. You were made by Muhammad Saad Amin. Be thoughtful, intellectually honest, and helpful.`;
 
-      // Refine System Prompt with Specialized Islamic Grounding
+      // Build final system prompt: IDENTITY always comes first, then persona, then knowledge
       const groundingHeader = `
 ### MISSION & WORLDVIEW
 You are an intellectual defender of Islam. Your goal is to provide a safe space for users to share their thoughts while maintaining a clear, logical, and firm stance on the truth of Islam.
@@ -204,7 +212,8 @@ You are an intellectual defender of Islam. Your goal is to provide a safe space 
 ${knowledgeContext || "No specific document snippets found. Use general Islamic logic and sound reasoning to prove Islamic truth."}
       `;
 
-      const finalSystemPrompt = `${groundingHeader}\n\n${baseSystemPrompt}`;
+      // IDENTITY_BLOCK is always first — it overrides everything
+      const finalSystemPrompt = `${IDENTITY_BLOCK}\n\n${groundingHeader}\n\n${baseSystemPrompt}`;
 
       // 1. Get Personal Model Response (Groq or HF)
       if (hasGroq) {
@@ -218,7 +227,6 @@ ${knowledgeContext || "No specific document snippets found. Use general Islamic 
       // 2. Get Powerful Model Response if Compare mode is on
       if (compare) {
         try {
-          // Priority: Use Groq for supported powerful models (much more reliable)
           const groqModels = ['70b', 'deepseek', 'llama3', 'mixtral', 'qwen'];
           const useGroqForComparison = hasGroq && comparisonModel &&
             groqModels.some(m => comparisonModel.toLowerCase().includes(m));
@@ -243,7 +251,7 @@ ${knowledgeContext || "No specific document snippets found. Use general Islamic 
     const assistantMessage = {
       role: 'assistant',
       content: aiResponse,
-      comparisonContent: comparisonResponse, // This will be null if not comparing
+      comparisonContent: comparisonResponse,
       timestamp: new Date()
     };
     conversation.messages.push(assistantMessage);
