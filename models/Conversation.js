@@ -10,10 +10,6 @@ const messageSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  comparisonContent: {
-    type: String, // Stores response from the powerful comparison model
-    default: null
-  },
   timestamp: {
     type: Date,
     default: Date.now
@@ -33,7 +29,7 @@ const conversationSchema = new mongoose.Schema({
   messages: [messageSchema],
   model: {
     type: String,
-    default: 'mistralai/Mistral-7B-Instruct-v0.3'
+    default: 'llama-3.3-70b-versatile'
   },
   isArchived: {
     type: Boolean,
