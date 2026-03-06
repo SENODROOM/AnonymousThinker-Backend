@@ -1,10 +1,9 @@
 const fetch = require('node-fetch');
 
-// ✅ Corrected HuggingFace Router endpoint
 const HUGGINGFACE_ROUTER_URL = 'https://router.huggingface.co/hf-inference/v1/chat/completions';
 
 /**
- * Call Hugging Face Inference API (new router endpoint)
+ * Call Hugging Face Inference API
  */
 async function callHuggingFace(messages, systemPrompt = '', modelId = null) {
   const selectedModel = modelId || process.env.HUGGINGFACE_MODEL || 'meta-llama/Llama-3.1-8B-Instruct';
@@ -16,8 +15,7 @@ async function callHuggingFace(messages, systemPrompt = '', modelId = null) {
   chatMessages.push(...messages.map(m => ({ role: m.role, content: m.content })));
 
   try {
-    console.log(`\n🔗 Calling HuggingFace:`);
-    console.log(`   Model: ${selectedModel}`);
+    console.log(`\n🔗 Calling HuggingFace: ${selectedModel}`);
 
     const response = await fetch(HUGGINGFACE_ROUTER_URL, {
       method: 'POST',
@@ -28,8 +26,9 @@ async function callHuggingFace(messages, systemPrompt = '', modelId = null) {
       body: JSON.stringify({
         model: selectedModel,
         messages: chatMessages,
-        max_tokens: 1500,
-        temperature: 0.7,
+        max_tokens: 2000,
+        temperature: 0.65,
+        top_p: 0.9,
         stream: false
       })
     });
@@ -38,12 +37,8 @@ async function callHuggingFace(messages, systemPrompt = '', modelId = null) {
       const errorText = await response.text();
       let errorData;
       try { errorData = JSON.parse(errorText); } catch (e) { errorData = { error: errorText }; }
-
       const errorMsg = errorData.error?.message || errorData.error || errorText;
-
-      if (errorMsg.includes('loading') || response.status === 503) {
-        throw new Error('MODEL_LOADING');
-      }
+      if (errorMsg.includes('loading') || response.status === 503) throw new Error('MODEL_LOADING');
       throw new Error(`HuggingFace API error: ${response.status} - ${errorMsg}`);
     }
 
@@ -59,22 +54,20 @@ async function callHuggingFace(messages, systemPrompt = '', modelId = null) {
 }
 
 /**
- * Alternative: Use free Groq API (much faster)
+ * Call Groq API — primary fast inference engine
  */
 async function callGroq(messages, systemPrompt = '', modelId = null) {
-  const selectedModel = modelId || 'llama-3.1-8b-instant';
+  const selectedModel = modelId || process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
   const groqMessages = [];
 
   if (systemPrompt) {
     groqMessages.push({ role: 'system', content: systemPrompt });
   }
-
-  groqMessages.push(...messages.map(m => ({
-    role: m.role,
-    content: m.content
-  })));
+  groqMessages.push(...messages.map(m => ({ role: m.role, content: m.content })));
 
   try {
+    console.log(`\n🚀 Calling Groq: ${selectedModel}`);
+
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -84,8 +77,11 @@ async function callGroq(messages, systemPrompt = '', modelId = null) {
       body: JSON.stringify({
         model: selectedModel,
         messages: groqMessages,
-        max_tokens: 1500,
-        temperature: 0.7
+        max_tokens: 2000,
+        temperature: 0.65,
+        top_p: 0.9,
+        frequency_penalty: 0.1,
+        presence_penalty: 0.1
       })
     });
 

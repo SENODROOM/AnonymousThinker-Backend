@@ -7,7 +7,7 @@ const knowledgeSchema = new mongoose.Schema({
         required: true
     },
     content: {
-        type: String, // The extracted text snippet
+        type: String, // The extracted text chunk
         required: true
     },
     fileName: {
@@ -18,13 +18,19 @@ const knowledgeSchema = new mongoose.Schema({
         type: String, // 'pdf' or 'txt'
         required: true
     },
+    pineconeIndexed: {
+        type: Boolean,
+        default: false  // True when this chunk has been vectorized and stored in Pinecone
+    },
     createdAt: {
         type: Date,
         default: Date.now
     }
 });
 
-// Adding a text index for full-text search during RAG
+// Text index for MongoDB fallback search
 knowledgeSchema.index({ content: 'text' });
+// Index for fast file-based queries
+knowledgeSchema.index({ fileName: 1, userId: 1 });
 
 module.exports = mongoose.model('Knowledge', knowledgeSchema);
