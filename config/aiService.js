@@ -1,13 +1,16 @@
 const fetch = require('node-fetch');
 
 const HUGGINGFACE_ROUTER_URL = 'https://router.huggingface.co/hf-inference/v1/chat/completions';
-
+const GROQ_ROUTER_URL = 'https://api.groq.com/openai/v1/chat/completions';
 /**
  * Call Hugging Face Inference API
  */
 async function callHuggingFace(messages, systemPrompt = '', modelId = null) {
+
+  // LLAMA MODEL SELECTION:
   const selectedModel = modelId || process.env.HUGGINGFACE_MODEL || 'meta-llama/Llama-3.1-8B-Instruct';
 
+  // CREATING AN ARRAY OF ALL USER MESSAGES:
   const chatMessages = [];
   if (systemPrompt) {
     chatMessages.push({ role: 'system', content: systemPrompt });
@@ -33,15 +36,22 @@ async function callHuggingFace(messages, systemPrompt = '', modelId = null) {
       })
     });
 
+
+    // SHOW THE ERROR MESSAGE IF THE RESPONSE IS NOT OK:
     if (!response.ok) {
       const errorText = await response.text();
       let errorData;
-      try { errorData = JSON.parse(errorText); } catch (e) { errorData = { error: errorText }; }
+      try {
+        errorData = JSON.parse(errorText);
+      } catch (e) {
+        errorData = { error: errorText };
+      }
       const errorMsg = errorData.error?.message || errorData.error || errorText;
       if (errorMsg.includes('loading') || response.status === 503) throw new Error('MODEL_LOADING');
       throw new Error(`HuggingFace API error: ${response.status} - ${errorMsg}`);
     }
 
+    // RETURNING THE API RESPONSE:
     const data = await response.json();
     return data.choices[0]?.message?.content?.trim() || '';
 
@@ -68,7 +78,7 @@ async function callGroq(messages, systemPrompt = '', modelId = null) {
   try {
     console.log(`\n🚀 Calling Groq: ${selectedModel}`);
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const response = await fetch(GROQ_ROUTER_URL, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
