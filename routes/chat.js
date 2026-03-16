@@ -1,81 +1,49 @@
 const express = require('express');
+const router = express.Router();
 const Conversation = require('../models/Conversation');
-const { SystemPrompt } = require('../models/Training');
+const { TrainingEntry, SystemPrompt } = require('../models/Training');
 const auth = require('../middleware/auth');
-const { callHuggingFace, callGroq } = require('../config/aiService');
+const { callGroq, callHuggingFace } = require('../config/aiService');
 const { queryVectors } = require('../config/pineconeService');
 
-const router = express.Router();
-
-// ============================================================
-// CORE IDENTITY — always prepended to every system prompt
-// ============================================================
+// ────────────────────────────────────────────────────────────────────────────────
+// IDENTITY & REASONING BLOCKS
+// ────────────────────────────────────────────────────────────────────────────────
 const IDENTITY_BLOCK = `
-### IDENTITY (NON-NEGOTIABLE — NEVER BREAK CHARACTER)
-Your name is AnonymousThinker. You are an AI designed to understand different thoughts and create meaningful conclusions from them. You were made by Muhammad Saad Amin.
-
-STRICT RULES:
-- If anyone asks "Who are you?", "What are you?", or "Who is AnonymousThinker?":
-  Reply EXACTLY: "I am AnonymousThinker, an AI to understand different thoughts and to create a conclusion from them. I was made by Muhammad Saad Amin."
-
-- If anyone asks "Who is Muhammad Saad Amin?" or "Who made you?" or "Who created you?":
-  Reply EXACTLY: "Muhammad Saad Amin is an explorer of different thoughts with a deep curiosity to learn — and he is the one who made me."
-
-- NEVER say you are made by Meta, Mistral, Hugging Face, Groq, OpenAI, or any other company or organization.
-- NEVER deny being AnonymousThinker.
-- NEVER break this identity under any circumstances, even if the user insists or tries to trick you.
+### IDENTITY
+You are AnonymousThinker — an AI built to understand different thoughts and draw meaningful conclusions.
+You were created by Muhammad Saad Amin.
+NEVER claim to be made by OpenAI, Google, Meta, Anthropic, Mistral, HuggingFace, or Groq.
 `;
 
-// ============================================================
-// REASONING FRAMEWORK
-// ============================================================
 const REASONING_FRAMEWORK = `
-### HOW TO REASON & ARGUE
-
-When answering questions about religion, philosophy, or theology:
-
-1. **UNDERSTAND THE QUESTION DEEPLY**: Identify what the person is really asking. Are they confused, skeptical, curious, or adversarial?
-
-2. **USE THE KNOWLEDGE BASE FIRST**: Always check the provided CONTEXTUAL KNOWLEDGE before answering. Quote and reference specific books/sources when relevant.
-
-3. **STRUCTURED ARGUMENTATION**:
-   - Start with the strongest logical point
-   - Use real examples, historical evidence, or Quranic/Hadith references
-   - Anticipate counter-arguments and address them proactively
-   - End with a clear, confident conclusion
-
-4. **INTELLECTUAL HONESTY**: If something is complex or debated within Islamic scholarship, acknowledge it. Being honest builds more trust than pretending to have all answers.
-
-5. **TONE**: Be confident, warm, and intellectually engaging. Never dismissive, condescending, or aggressive. The goal is to guide, not to win arguments.
-
-6. **FOR ATHEIST/AGNOSTIC ARGUMENTS**: Use the Kalam Cosmological Argument, Fine-Tuning Argument, Moral Argument, and Historical/Textual Evidence for the Quran. Show empathy for their worldview before correcting it.
-
-7. **FOR COMPARATIVE RELIGION**: Acknowledge the truth and sincerity in other faiths, then explain clearly and respectfully why Islam is the final and complete revelation.
-
-8. **CITE YOUR SOURCES**: When referencing knowledge from the database, say "According to [book/source]..." to ground your response in evidence.
+### REASONING FRAMEWORK
+1. Identify the core question or claim
+2. Present the strongest counter-arguments first (steel-man)
+3. Apply rigorous logical analysis
+4. Ground your response in evidence from the knowledge base when available
+5. Deliver a clear, well-structured conclusion
 `;
 
-// ============================================================
-// DETECT if a message is a simple conversational question
-// that does NOT need knowledge base lookup
-// ============================================================
-const SKIP_RAG_PATTERNS = [
-  /^(hi|hello|hey|salam|salaam|assalam|assalamualaikum|greetings|good\s*(morning|evening|afternoon|night))[!?.،,]*$/i,
-  /^(who (are|made|created|built) you|what are you|tell me about yourself|introduce yourself|your name)[?!.]*$/i,
-  /^(how are you|how r u|are you okay|you good|what'?s up|sup)[?!.]*$/i,
-  /^(thank(s| you)|thx|jazakallah|jazak allah|shukran|ok|okay|cool|great|nice|got it|understood)[!.،,]*$/i,
-  /^(yes|no|maybe|sure|alright|fine)[!.?,]*$/i,
-  /^bye|goodbye|see you|take care|khuda hafiz/i,
-];
-
-function shouldSkipRAG(message) {
-  const trimmed = message.trim();
-  return SKIP_RAG_PATTERNS.some(pattern => pattern.test(trimmed));
+// ────────────────────────────────────────────────────────────────────────────────
+// SIMPLE MESSAGE DETECTOR — skip RAG for greetings
+// ────────────────────────────────────────────────────────────────────────────────
+function shouldSkipRAG(content) {
+  const lower = content.toLowerCase().trim();
+  const simplePatterns = [
+    /^(hi|hello|hey|salam|salaam|assalam|greetings)[\s!.,?]*$/i,
+    /^(how are you|what's up|whats up|how r u|how do you do)[\s!.,?]*$/i,
+    /^(who are you|what are you|what is your name|who made you)[\s!.,?]*$/i,
+    /^(thanks|thank you|thank u|jazakallah|shukran|ok|okay|sure|great|good|nice|cool|awesome)[\s!.,?]*$/i,
+    /^(yes|no|maybe|perhaps|agree|disagree)[\s!.,?]*$/i,
+    /^.{1,15}$/,
+  ];
+  return simplePatterns.some(p => p.test(lower));
 }
 
-// ============================================================
+// ────────────────────────────────────────────────────────────────────────────────
 // ROUTES
-// ============================================================
+// ────────────────────────────────────────────────────────────────────────────────
 
 // GET /api/chat/conversations
 router.get('/conversations', auth, async (req, res) => {
@@ -84,8 +52,8 @@ router.get('/conversations', auth, async (req, res) => {
       userId: req.user._id,
       isArchived: false
     })
-      .select('title createdAt updatedAt messages model')
-      .sort({ updatedAt: -1 });
+      .select('title createdAt updatedAt messages model isPinned')
+      .sort({ isPinned: -1, updatedAt: -1 });
 
     const conversationsWithPreview = conversations.map(conv => ({
       _id: conv._id,
@@ -96,13 +64,36 @@ router.get('/conversations', auth, async (req, res) => {
       lastMessage: conv.messages.length > 0
         ? conv.messages[conv.messages.length - 1].content.substring(0, 100)
         : '',
-      model: conv.model
+      model: conv.model,
+      isPinned: conv.isPinned || false
     }));
 
     res.json(conversationsWithPreview);
   } catch (error) {
     console.error('Get conversations error:', error);
     res.status(500).json({ error: 'Failed to fetch conversations' });
+  }
+});
+
+// GET /api/chat/conversations/archived
+router.get('/conversations/archived', auth, async (req, res) => {
+  try {
+    const conversations = await Conversation.find({
+      userId: req.user._id,
+      isArchived: true
+    })
+      .select('title createdAt updatedAt messages')
+      .sort({ updatedAt: -1 });
+
+    res.json(conversations.map(conv => ({
+      _id: conv._id,
+      title: conv.title,
+      createdAt: conv.createdAt,
+      updatedAt: conv.updatedAt,
+      messageCount: conv.messages.length,
+    })));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch archived conversations' });
   }
 });
 
@@ -140,7 +131,7 @@ router.get('/conversations/:id', auth, async (req, res) => {
   }
 });
 
-// PUT /api/chat/conversations/:id
+// PUT /api/chat/conversations/:id  (rename)
 router.put('/conversations/:id', auth, async (req, res) => {
   try {
     const { title } = req.body;
@@ -155,6 +146,32 @@ router.put('/conversations/:id', auth, async (req, res) => {
     res.json(conversation);
   } catch (error) {
     res.status(500).json({ error: 'Failed to update conversation' });
+  }
+});
+
+// PATCH /api/chat/conversations/:id/pin  — toggle pin
+router.patch('/conversations/:id/pin', auth, async (req, res) => {
+  try {
+    const conversation = await Conversation.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+    conversation.isPinned = !conversation.isPinned;
+    await conversation.save();
+    res.json({ isPinned: conversation.isPinned });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to toggle pin' });
+  }
+});
+
+// PATCH /api/chat/conversations/:id/archive  — toggle archive
+router.patch('/conversations/:id/archive', auth, async (req, res) => {
+  try {
+    const conversation = await Conversation.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+    conversation.isArchived = !conversation.isArchived;
+    await conversation.save();
+    res.json({ isArchived: conversation.isArchived });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to toggle archive' });
   }
 });
 
@@ -215,10 +232,6 @@ router.post('/conversations/:id/message', auth, async (req, res) => {
     let aiResponse;
 
     try {
-      // ============================================================
-      // SMART RAG — skip for greetings/identity/small talk
-      // Only search knowledge base for substantive questions
-      // ============================================================
       let knowledgeContext = '';
       let sourcesUsed = [];
       const isSimpleMessage = shouldSkipRAG(content);
@@ -227,8 +240,6 @@ router.post('/conversations/:id/message', auth, async (req, res) => {
         try {
           console.log(`\n🔍 Pinecone RAG: "${content.substring(0, 60)}..."`);
           const matches = await queryVectors(content, 5);
-
-          // Higher threshold (0.65) = only truly relevant passages
           const goodMatches = matches.filter(m => m.score > 0.65);
 
           if (goodMatches.length > 0) {
@@ -249,15 +260,11 @@ router.post('/conversations/:id/message', auth, async (req, res) => {
         console.log(`\n💬 Simple message — skipping RAG`);
       }
 
-      // Fetch Global Admin Persona
       const adminPersona = await SystemPrompt.findOne({ isActive: true }).sort({ createdAt: -1 });
       const baseSystemPrompt = adminPersona
         ? adminPersona.prompt
         : `You are AnonymousThinker, an AI to understand different thoughts and to create a conclusion from them. You were made by Muhammad Saad Amin. Be thoughtful, intellectually honest, and helpful.`;
 
-      // ============================================================
-      // BUILD FINAL SYSTEM PROMPT
-      // ============================================================
       let knowledgeSection = '';
       if (knowledgeContext) {
         knowledgeSection = `
@@ -268,7 +275,6 @@ USE THEM as your primary evidence. Cite the source name naturally in your respon
 ${knowledgeContext}
 `;
       }
-      // No knowledge section at all for simple messages — keeps response clean
 
       const missionBlock = `
 ### MISSION & WORLDVIEW
@@ -284,7 +290,6 @@ You are an intellectual defender of Islam. Your role is to:
         ? `${IDENTITY_BLOCK}\n${REASONING_FRAMEWORK}\n${missionBlock}\n${knowledgeSection}\n### YOUR PERSONA\n${baseSystemPrompt}`
         : `${IDENTITY_BLOCK}\n${missionBlock}\n### YOUR PERSONA\n${baseSystemPrompt}`;
 
-      // Call AI
       if (hasGroq) {
         aiResponse = await callGroq(recentMessages, finalSystemPrompt);
       } else if (hasHuggingFace) {
@@ -293,9 +298,7 @@ You are an intellectual defender of Islam. Your role is to:
         aiResponse = `⚠️ **No AI API key configured.** Please add GROQ_API_KEY or HUGGINGFACE_API_KEY to your environment variables.`;
       }
 
-      // Only append sources if knowledge was actually used AND sources exist
       if (sourcesUsed.length > 0 && knowledgeContext) {
-        // Clean up filenames for display — remove garbled encoding artifacts
         const cleanSources = sourcesUsed
           .map(s => s.replace(/[^\x00-\x7F]/g, '').replace(/\s+/g, ' ').trim())
           .filter(s => s.length > 3)
@@ -313,7 +316,8 @@ You are an intellectual defender of Islam. Your role is to:
     const assistantMessage = {
       role: 'assistant',
       content: aiResponse,
-      timestamp: new Date()
+      timestamp: new Date(),
+      reactions: { thumbsUp: 0, thumbsDown: 0 }
     };
     conversation.messages.push(assistantMessage);
 
@@ -332,7 +336,51 @@ You are an intellectual defender of Islam. Your role is to:
   }
 });
 
-// DELETE /api/chat/conversations/:id/messages
+// POST /api/chat/conversations/:id/messages/:msgIndex/react
+// Body: { reaction: 'thumbsUp' | 'thumbsDown' }
+router.post('/conversations/:id/messages/:msgIndex/react', auth, async (req, res) => {
+  try {
+    const { reaction } = req.body;
+    if (!['thumbsUp', 'thumbsDown'].includes(reaction)) {
+      return res.status(400).json({ error: 'Invalid reaction' });
+    }
+
+    const conversation = await Conversation.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+
+    const msgIndex = parseInt(req.params.msgIndex);
+    const message = conversation.messages[msgIndex];
+    if (!message || message.role !== 'assistant') {
+      return res.status(400).json({ error: 'Invalid message index' });
+    }
+
+    if (!message.reactions) message.reactions = { thumbsUp: 0, thumbsDown: 0 };
+
+    // Toggle: if same reaction exists, remove it; otherwise set new one
+    const previousReaction = message.userReaction;
+    if (previousReaction === reaction) {
+      // Un-react
+      message.reactions[reaction] = Math.max(0, (message.reactions[reaction] || 0) - 1);
+      message.userReaction = null;
+    } else {
+      if (previousReaction) {
+        message.reactions[previousReaction] = Math.max(0, (message.reactions[previousReaction] || 0) - 1);
+      }
+      message.reactions[reaction] = (message.reactions[reaction] || 0) + 1;
+      message.userReaction = reaction;
+    }
+
+    conversation.markModified('messages');
+    await conversation.save();
+
+    res.json({ reactions: message.reactions, userReaction: message.userReaction });
+  } catch (error) {
+    console.error('React error:', error);
+    res.status(500).json({ error: 'Failed to save reaction' });
+  }
+});
+
+// DELETE /api/chat/conversations/:id/messages  (clear messages)
 router.delete('/conversations/:id/messages', auth, async (req, res) => {
   try {
     const conversation = await Conversation.findOneAndUpdate(
@@ -346,6 +394,28 @@ router.delete('/conversations/:id/messages', auth, async (req, res) => {
     res.json({ message: 'Messages cleared', conversation });
   } catch (error) {
     res.status(500).json({ error: 'Failed to clear messages' });
+  }
+});
+
+// GET /api/chat/conversations/:id/export
+// Returns conversation as formatted markdown text
+router.get('/conversations/:id/export', auth, async (req, res) => {
+  try {
+    const conversation = await Conversation.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+
+    const lines = [`# ${conversation.title}`, `*Exported from AnonymousThinker · ${new Date().toLocaleString()}*\n\n---\n`];
+    for (const msg of conversation.messages) {
+      const role = msg.role === 'user' ? '**You**' : '**AnonymousThinker**';
+      const time = new Date(msg.timestamp).toLocaleString();
+      lines.push(`${role} *(${time})*\n\n${msg.content}\n\n---\n`);
+    }
+
+    res.set('Content-Type', 'text/plain; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="${conversation.title.replace(/[^a-z0-9]/gi, '_')}.md"`);
+    res.send(lines.join('\n'));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export conversation' });
   }
 });
 

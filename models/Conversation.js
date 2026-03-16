@@ -13,8 +13,19 @@ const messageSchema = new mongoose.Schema({
   timestamp: {
     type: Date,
     default: Date.now
+  },
+  // Reaction data stored per-message (AI messages only)
+  reactions: {
+    thumbsUp: { type: Number, default: 0 },
+    thumbsDown: { type: Number, default: 0 }
+  },
+  // Last reaction by this user (for toggle logic)
+  userReaction: {
+    type: String,
+    enum: ['thumbsUp', 'thumbsDown', null],
+    default: null
   }
-});
+}, { _id: true });
 
 const conversationSchema = new mongoose.Schema({
   userId: {
@@ -24,42 +35,40 @@ const conversationSchema = new mongoose.Schema({
   },
   title: {
     type: String,
-    default: 'New Chat'
+    default: 'New Chat',
+    trim: true,
+    maxLength: 120
   },
   messages: [messageSchema],
   model: {
     type: String,
-    default: 'llama-3.3-70b-versatile'
+    default: 'groq'
+  },
+  // ── New fields ────────────────────────────
+  isPinned: {
+    type: Boolean,
+    default: false
   },
   isArchived: {
     type: Boolean,
     default: false
   },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  }
+  // ──────────────────────────────────────────
+}, {
+  timestamps: true  // adds createdAt, updatedAt automatically
 });
 
-// Update the updatedAt field on every save
-conversationSchema.pre('save', function (next) {
-  this.updatedAt = new Date();
-  next();
-});
-
-// Auto-generate title from first message
+// Auto-generate a title from the first user message
 conversationSchema.methods.generateTitle = function () {
-  if (this.messages.length > 0) {
-    const firstUserMessage = this.messages.find(m => m.role === 'user');
-    if (firstUserMessage) {
-      const title = firstUserMessage.content.substring(0, 50);
-      this.title = title.length < firstUserMessage.content.length ? title + '...' : title;
-    }
+  const firstUserMsg = this.messages.find(m => m.role === 'user');
+  if (firstUserMsg) {
+    const words = firstUserMsg.content.trim().split(/\s+/).slice(0, 8).join(' ');
+    this.title = words.length > 60 ? words.substring(0, 57) + '...' : words;
   }
 };
+
+// Index for common queries
+conversationSchema.index({ userId: 1, isArchived: 1, updatedAt: -1 });
+conversationSchema.index({ userId: 1, isPinned: 1, updatedAt: -1 });
 
 module.exports = mongoose.model('Conversation', conversationSchema);
