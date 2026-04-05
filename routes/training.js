@@ -1,11 +1,11 @@
 const express = require('express');
-console.log('--- TRAINING ROUTE FILE LOADED: v2.0.0 (Pinecone RAG) ---');
 const { TrainingEntry, SystemPrompt } = require('../models/Training');
 const Knowledge = require('../models/Knowledge');
 const auth = require('../middleware/auth');
 const adminAuth = require('../middleware/adminAuth');
 const multer = require('multer');
 const { indexChunks, deleteVectorsByFileName } = require('../config/pineconeService');
+const { syncAllBooks } = require('../config/bookSyncService');
 
 const upload = multer({ storage: multer.memoryStorage() });
 const router = express.Router();
@@ -73,12 +73,6 @@ function smartChunk(text, wordsPerChunk = 500) {
 
   return chunks;
 }
-
-// Debug middleware
-router.use((req, res, next) => {
-  console.log(`[TRAINING-ROUTE] ${req.method} ${req.originalUrl}`);
-  next();
-});
 
 // ===== BASIC AUTH ROUTES =====
 
@@ -389,6 +383,36 @@ router.post('/knowledge/reindex', async (req, res) => {
   } catch (error) {
     console.error('[REINDEX ERROR]', error);
     res.status(500).json({ error: 'Reindex failed: ' + error.message });
+  }
+});
+
+// ============================================================
+// POST /api/training/books/sync (ADMIN ONLY)
+// Sync books from /books and /guide directories to MongoDB & Pinecone
+// ============================================================
+router.post('/books/sync', auth, adminAuth, async (req, res) => {
+  try {
+    const { adminUserId } = req.body;
+
+    // DETERMINE WHICH ADMIN OWNS THE SYNC
+    let ownerUserId = adminUserId;
+
+    if (!ownerUserId) {
+      ownerUserId = req.user._id; // Use current authenticated admin
+    }
+
+    console.log(`[SYNC] Starting book sync triggered by ${req.user._id} (owner: ${ownerUserId})`);
+
+    // PERFORM SYNC
+    const result = await syncAllBooks(ownerUserId);
+
+    res.json({
+      status: 'success',
+      summary: result.summary
+    });
+  } catch (error) {
+    console.error('[SYNC ERROR]', error.message);
+    res.status(500).json({ error: error.message || 'Book sync failed' });
   }
 });
 

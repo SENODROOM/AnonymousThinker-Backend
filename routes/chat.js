@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const Conversation = require('../models/Conversation');
 const { TrainingEntry, SystemPrompt } = require('../models/Training');
+const UserSettings = require('../models/UserSettings');
+const { DEFAULT_SETTINGS } = require('../models/UserSettings');
 const auth = require('../middleware/auth');
 const { callGroq, callHuggingFace } = require('../config/aiService');
 const { queryVectors } = require('../config/pineconeService');
@@ -229,16 +231,35 @@ router.post('/conversations/:id/message', auth, async (req, res) => {
     const hasHuggingFace = !!(process.env.HUGGINGFACE_API_KEY && process.env.HUGGINGFACE_API_KEY.trim());
     const hasPinecone = !!(process.env.PINECONE_API_KEY && process.env.PINECONE_HOST);
 
+    // ============================================================
+    // FETCH USER SETTINGS (with fallback to defaults)
+    // ============================================================
+    let userSettings = null;
+    try {
+      userSettings = await UserSettings.findOne({ userId: req.user._id });
+    } catch (err) {
+      console.warn('[SETTINGS] Failed to fetch user settings:', err.message);
+    }
+
+    // Use user settings with explicit fallback to defaults
+    const settings = userSettings || {};
+    const temperature = settings.temperature ?? DEFAULT_SETTINGS.temperature;
+    const maxTokens = settings.maxTokens ?? DEFAULT_SETTINGS.maxTokens;
+    const skipRAG = settings.skipRAGForSimple ?? DEFAULT_SETTINGS.skipRAGForSimple;
+    const selectedModel = settings.defaultModel ?? DEFAULT_SETTINGS.defaultModel;
+
+    console.log(`[CHAT] Using settings - temp: ${temperature}, tokens: ${maxTokens}, model: ${selectedModel}`);
+
     let aiResponse;
 
     try {
       let knowledgeContext = '';
       let sourcesUsed = [];
-      const isSimpleMessage = shouldSkipRAG(content);
+      const isSimpleMessage = skipRAG && shouldSkipRAG(content);
 
       if (hasPinecone && !isSimpleMessage) {
         try {
-          console.log(`\n🔍 Pinecone RAG: "${content.substring(0, 60)}..."`);
+          console.log(`[CHAT] Querying Pinecone for context...`);
           const matches = await queryVectors(content, 5);
           const goodMatches = matches.filter(m => m.score > 0.65);
 
@@ -249,15 +270,15 @@ router.post('/conversations/:id/message', auth, async (req, res) => {
                 `[Source ${i + 1}: "${m.metadata?.fileName || 'Knowledge Base'}"]\n${m.metadata?.content}`
               )
               .join('\n\n---\n\n');
-            console.log(`✅ RAG: ${goodMatches.length} relevant passages | Sources: ${sourcesUsed.join(', ')}`);
+            console.log(`[CHAT] Found ${goodMatches.length} relevant passages from: ${sourcesUsed.join(', ')}`);
           } else {
-            console.log(`⚠️ RAG: No high-confidence matches (best: ${matches[0]?.score?.toFixed(3) || 'N/A'})`);
+            console.log(`[CHAT] No high-confidence RAG matches`);
           }
         } catch (pineconeError) {
-          console.error('❌ Pinecone RAG failed:', pineconeError.message);
+          console.error('[CHAT] Pinecone RAG error:', pineconeError.message);
         }
       } else if (isSimpleMessage) {
-        console.log(`\n💬 Simple message — skipping RAG`);
+        console.log(`[CHAT] Skipping RAG for simple message`);
       }
 
       const adminPersona = await SystemPrompt.findOne({ isActive: true }).sort({ createdAt: -1 });
@@ -291,9 +312,9 @@ You are an intellectual defender of Islam. Your role is to:
         : `${IDENTITY_BLOCK}\n${missionBlock}\n### YOUR PERSONA\n${baseSystemPrompt}`;
 
       if (hasGroq) {
-        aiResponse = await callGroq(recentMessages, finalSystemPrompt);
+        aiResponse = await callGroq(recentMessages, finalSystemPrompt, null, { temperature, maxTokens });
       } else if (hasHuggingFace) {
-        aiResponse = await callHuggingFace(recentMessages, finalSystemPrompt);
+        aiResponse = await callHuggingFace(recentMessages, finalSystemPrompt, null, { temperature, maxTokens });
       } else {
         aiResponse = `⚠️ **No AI API key configured.** Please add GROQ_API_KEY or HUGGINGFACE_API_KEY to your environment variables.`;
       }

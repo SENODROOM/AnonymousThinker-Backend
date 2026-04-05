@@ -5,10 +5,14 @@ const GROQ_ROUTER_URL = 'https://api.groq.com/openai/v1/chat/completions';
 /**
  * Call Hugging Face Inference API
  */
-async function callHuggingFace(messages, systemPrompt = '', modelId = null) {
+async function callHuggingFace(messages, systemPrompt = '', modelId = null, options = {}) {
 
   // LLAMA MODEL SELECTION:
   const selectedModel = modelId || process.env.HUGGINGFACE_MODEL || 'meta-llama/Llama-3.1-8B-Instruct';
+
+  // USER SETTINGS (with defaults)
+  const temperature = options.temperature ?? 0.65;
+  const maxTokens = options.maxTokens ?? 2000;
 
   // CREATING AN ARRAY OF ALL USER MESSAGES:
   const chatMessages = [];
@@ -18,7 +22,7 @@ async function callHuggingFace(messages, systemPrompt = '', modelId = null) {
   chatMessages.push(...messages.map(m => ({ role: m.role, content: m.content })));
 
   try {
-    console.log(`\n🔗 Calling HuggingFace: ${selectedModel}`);
+    console.log(`[AI] Calling HuggingFace: ${selectedModel}`);
 
     const response = await fetch(HUGGINGFACE_ROUTER_URL, {
       method: 'POST',
@@ -29,8 +33,8 @@ async function callHuggingFace(messages, systemPrompt = '', modelId = null) {
       body: JSON.stringify({
         model: selectedModel,
         messages: chatMessages,
-        max_tokens: 2000,
-        temperature: 0.65,
+        max_tokens: maxTokens,
+        temperature: temperature,
         top_p: 0.9,
         stream: false
       })
@@ -66,8 +70,13 @@ async function callHuggingFace(messages, systemPrompt = '', modelId = null) {
 /**
  * Call Groq API — primary fast inference engine
  */
-async function callGroq(messages, systemPrompt = '', modelId = null) {
+async function callGroq(messages, systemPrompt = '', modelId = null, options = {}) {
   const selectedModel = modelId || process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+
+  // USER SETTINGS (with defaults)
+  const temperature = options.temperature ?? 0.65;
+  const maxTokens = options.maxTokens ?? 2000;
+
   const groqMessages = [];
 
   if (systemPrompt) {
@@ -76,7 +85,7 @@ async function callGroq(messages, systemPrompt = '', modelId = null) {
   groqMessages.push(...messages.map(m => ({ role: m.role, content: m.content })));
 
   try {
-    console.log(`\n🚀 Calling Groq: ${selectedModel}`);
+    console.log(`[AI] Calling Groq: ${selectedModel}`);
 
     const response = await fetch(GROQ_ROUTER_URL, {
       method: 'POST',
@@ -87,8 +96,8 @@ async function callGroq(messages, systemPrompt = '', modelId = null) {
       body: JSON.stringify({
         model: selectedModel,
         messages: groqMessages,
-        max_tokens: 2000,
-        temperature: 0.65,
+        max_tokens: maxTokens,
+        temperature: temperature,
         top_p: 0.9,
         frequency_penalty: 0.1,
         presence_penalty: 0.1
@@ -103,7 +112,7 @@ async function callGroq(messages, systemPrompt = '', modelId = null) {
     const data = await response.json();
     return data.choices[0]?.message?.content || '';
   } catch (error) {
-    console.error(`❌ Groq call (${selectedModel}) failed:`, error.message);
+    console.error(`[AI] Groq call (${selectedModel}) failed:`, error.message);
     throw error;
   }
 }
