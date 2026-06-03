@@ -74,6 +74,10 @@ function smartChunk(text, wordsPerChunk = 500) {
   return chunks;
 }
 
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Debug middleware
 router.use((req, res, next) => {
   console.log(`[TRAINING-ROUTE] ${req.method} ${req.originalUrl}`);
@@ -242,9 +246,29 @@ router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    const fileName = req.file.originalname;
+    const fileName = (req.body.fileName || req.file.originalname || '').trim();
+    if (!fileName) {
+      return res.status(400).json({ error: 'File name is required' });
+    }
+
     const fileType = fileName.split('.').pop().toLowerCase();
     let text = '';
+
+    const existingFile = await Knowledge.exists({
+      userId: req.user._id,
+      fileName: { $regex: `^${escapeRegex(fileName)}$`, $options: 'i' }
+    });
+    if (existingFile) {
+      return res.status(200).json({
+        message: `"${fileName}" is already in the knowledge base`,
+        skipped: true,
+        duplicate: true,
+        fileName,
+        chunks: 0,
+        pineconeChunks: 0,
+        semanticSearch: false
+      });
+    }
 
     if (fileType === 'pdf') {
       const pdfParser = require('pdf-parse');
@@ -275,14 +299,7 @@ router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
       });
     }
 
-    // Delete existing entries for this file
-    await Knowledge.deleteMany({ userId: req.user._id, fileName });
-
-    // Delete old Pinecone vectors for this file
     const hasPinecone = !!(process.env.PINECONE_API_KEY && process.env.PINECONE_HOST);
-    if (hasPinecone) {
-      await deleteVectorsByFileName(fileName);
-    }
 
     // Smart chunk the text
     const chunks = smartChunk(trimmedText, 500);
